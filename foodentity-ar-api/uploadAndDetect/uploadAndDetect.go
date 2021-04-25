@@ -1,12 +1,12 @@
 package uploadAndDetect
 
 import (
+	"fmt"
 	"foodentity-ar-api/detectLabel"
+	"foodentity-ar-api/dynamoDB"
 	"foodentity-ar-api/localFile"
 	"foodentity-ar-api/model"
 	"foodentity-ar-api/s3"
-
-	"github.com/aws/aws-sdk-go/service/rekognition"
 )
 
 func NewUploadAndDetectUseCase(
@@ -14,17 +14,19 @@ func NewUploadAndDetectUseCase(
 	fileRepository localFile.LocalFileRepository,
 	s3Repository s3.S3Repository,
 	detectLabelRepository detectLabel.DetectLabelRepository,
+	fetchFoodRepository dynamoDB.FetchFoodRepository,
 ) UploadAndDetectUseCase {
 	return uploadAndDetectUseCaseImpl{
 		Request:               request,
 		LocalFileRepository:   fileRepository,
 		S3Repository:          s3Repository,
 		DetectLabelRepository: detectLabelRepository,
+		FetchFoodRepository:   fetchFoodRepository,
 	}
 }
 
 type UploadAndDetectUseCase interface {
-	Exec(imageName string) (*rekognition.DetectLabelsOutput, error)
+	Exec(imageName string) (*model.Response, error)
 }
 
 type uploadAndDetectUseCaseImpl struct {
@@ -32,9 +34,10 @@ type uploadAndDetectUseCaseImpl struct {
 	LocalFileRepository   localFile.LocalFileRepository
 	S3Repository          s3.S3Repository
 	DetectLabelRepository detectLabel.DetectLabelRepository
+	FetchFoodRepository   dynamoDB.FetchFoodRepository
 }
 
-func (impl uploadAndDetectUseCaseImpl) Exec(imageName string) (*rekognition.DetectLabelsOutput, error) {
+func (impl uploadAndDetectUseCaseImpl) Exec(imageName string) (*model.Response, error) {
 	if localFileErr := impl.LocalFileRepository.Add(impl.Request, imageName); localFileErr != nil {
 		return nil, localFileErr
 	}
@@ -43,10 +46,22 @@ func (impl uploadAndDetectUseCaseImpl) Exec(imageName string) (*rekognition.Dete
 		return nil, s3Err
 	}
 
-	res, detectErr := impl.DetectLabelRepository.Detect(imageName)
+	result, detectErr := impl.DetectLabelRepository.Detect(imageName)
 	if detectErr != nil {
 		return nil, detectErr
 	}
 
-	return res, nil
+	var labels []string
+	for _, label := range result.Labels {
+		labels = append(labels, *label.Name)
+	}
+	fmt.Printf("labels: %v\n", labels)
+
+	response, fetchErr := impl.FetchFoodRepository.Fetch(labels)
+	//response, fetchErr := impl.FetchFoodRepository.Fetch([]string{"hum"})
+	if fetchErr != nil {
+		return nil, fetchErr
+	}
+
+	return response, nil
 }

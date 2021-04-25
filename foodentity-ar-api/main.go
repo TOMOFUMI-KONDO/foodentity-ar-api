@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"foodentity-ar-api/detectLabel"
+	"foodentity-ar-api/dynamoDB"
 	"foodentity-ar-api/localFile"
 	"foodentity-ar-api/model"
 	"foodentity-ar-api/s3"
@@ -18,46 +19,40 @@ import (
 func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	fmt.Println("Start lambda process.")
 
-	req, err := convertJsonToStruct(request.Body)
-	if err != nil {
-		fmt.Printf("error: %v\n", err)
-		return events.APIGatewayProxyResponse{
-			Body:       err.Error(),
-			StatusCode: 500,
-		}, err
+	req, convertJsonError := convertJsonToStruct(request.Body)
+	if convertJsonError != nil {
+		return handleError("convertJsonError", convertJsonError)
 	}
 
 	fileRepository := localFile.NewLocalFileRepositoryImpl()
 	s3Repository := s3.NewS3RepositoryImpl()
 	detectLabelRepository := detectLabel.NewDetectLabelRepositoryImpl()
+	fetchFoodRepository := dynamoDB.NewFetchFoodRepositoryImpl()
 	jstCurrentUnixTime := int(time.Now().UTC().In(time.FixedZone("Asia/Tokyo", 9*60*60)).Unix())
 	imageName := strconv.Itoa(jstCurrentUnixTime) + ".png"
 
-	detectResult, useCaseErr := uploadAndDetect.NewUploadAndDetectUseCase(
+	response, useCaseErr := uploadAndDetect.NewUploadAndDetectUseCase(
 		req,
 		fileRepository,
 		s3Repository,
 		detectLabelRepository,
+		fetchFoodRepository,
 	).Exec(imageName)
 	if useCaseErr != nil {
-		fmt.Printf("useCaseError: %v\n", useCaseErr)
-		return events.APIGatewayProxyResponse{
-			Body:       useCaseErr.Error(),
-			StatusCode: 500,
-		}, useCaseErr
+		return handleError("useCaseErr", useCaseErr)
 	}
 
-	body, jsonEncodeErr := json.Marshal(detectResult.Labels)
+	body, jsonEncodeErr := json.Marshal(response)
 	if jsonEncodeErr != nil {
-		fmt.Printf("jsonENcodeError: %v\n", jsonEncodeErr)
-		return events.APIGatewayProxyResponse{
-			Body:       jsonEncodeErr.Error(),
-			StatusCode: 500,
-		}, useCaseErr
+		return handleError("jsonEncode", jsonEncodeErr)
 	}
 
 	fmt.Println("Finish lambda process.")
 
+	//body, _ := json.Marshal(model.Response{
+	//	Food:       "hum",
+	//	Identities: []string{"cochineal", "nitrous acid", "chemical protein"},
+	//})
 	return events.APIGatewayProxyResponse{
 		Body:       string(body),
 		StatusCode: 200,
@@ -72,6 +67,14 @@ func convertJsonToStruct(inputs string) (*model.Request, error) {
 		return nil, err
 	}
 	return &req, nil
+}
+
+func handleError(key string, error error) (events.APIGatewayProxyResponse, error) {
+	fmt.Printf(key+": %v\n", error)
+	return events.APIGatewayProxyResponse{
+		Body:       error.Error(),
+		StatusCode: 500,
+	}, error
 }
 
 func main() {
